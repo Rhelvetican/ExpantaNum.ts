@@ -1,3 +1,0 @@
-require("expantanum")
-
-print("test")
