@@ -1,0 +1,3 @@
+require("expantanum")
+
+print("test")
