@@ -50,9 +50,9 @@ export class ExpantaNum implements IntoExpantaNum {
 		NEGATIVE_INFINITY: ExpantaNum.fromNumber(Number.NEGATIVE_INFINITY),
 		POSITIVE_INFINITY: ExpantaNum.fromNumber(Number.POSITIVE_INFINITY),
 
-		E_MAX_SAFE_INTEGER: "e" + Number.MAX_SAFE_INTEGER,
-		EE_MAX_SAFE_INTEGER: "ee" + Number.MAX_SAFE_INTEGER,
-		TETRATED_MAX_SAFE_INTEGER: "10^^" + Number.MAX_SAFE_INTEGER,
+		E_MAX_SAFE_INTEGER: ExpantaNum.fromString("e" + Number.MAX_SAFE_INTEGER),
+		EE_MAX_SAFE_INTEGER: ExpantaNum.fromString("ee" + Number.MAX_SAFE_INTEGER),
+		TETRATED_MAX_SAFE_INTEGER: ExpantaNum.fromString("10^^" + Number.MAX_SAFE_INTEGER),
 	}
 
 	static isExpantaNum =
@@ -129,7 +129,7 @@ export class ExpantaNum implements IntoExpantaNum {
 
 	operator(i: number, val?: number) {
 		if (typeof val === "number") this.setOperator(i, val)
-		else this.getOperator(i)
+		else return this.getOperator(i)
 	}
 
 	normalize() {
@@ -381,7 +381,7 @@ export class ExpantaNum implements IntoExpantaNum {
 		return that.normalize()
 	}
 
-	static fromString(s: string) {
+	static fromString(s: string): ExpantaNum {
 		const LONG_STRING_MIN_LENGTH = 17
 		const log10LongStr = (s: string) => {
 			return Math.log10(
@@ -589,12 +589,62 @@ export class ExpantaNum implements IntoExpantaNum {
 		return m * r
 	}
 
+	toString() {
+		let s = ""
+		if (this.sign.isNegative()) s += "-"
+		if (this.isNaN()) s += "NaN"
+		else if (!this.isFinite()) s += "Infinity"
+		else {
+			if (!this.layer) s += ""
+			else if (this.layer < 3) s += "J".repeat(this.layer)
+			else s += `J^${this.layer} `
+
+			if (this.array.length >= 2 && this.array[1].operator >= 2) {
+				for (let i = this.array.length - 1; i >= 2; --i) {
+					const item = this.array[i]
+					const oper = item.operator >= 5 ? `\{${item.operator}\}` : "^".repeat(item.operator)
+
+					if (item.base > 1) s += `(10${oper})^${item.base} `
+					else if (item.base == 1) s += `10${oper}`
+				}
+			}
+
+			const op0 = this.getOperator(0), op1 = this.getOperator(1)
+			if (!op1) s += `${op0}`
+			else if (op1 < 3) s += `${"e".repeat(op1 - 1)}${Math.pow(10, op0 - Math.floor(op0))}e${Math.floor(op0)}`
+			else if (op1 < 8) s += `${"e".repeat(op1) + op0}`
+			else s += `(10^)^${op1} ${op0}`
+		}
+
+		return s
+	}
+
+	valueOf() {
+		return this.toString()
+	}
+
+	toNumber() {
+		let x = 1
+		if (this.sign.isNegative()) x *= -1
+		if (
+			this.array.length >= 2 &&
+			(this.array[1].operator >= 2 || this.array[1].base >= 2 || this.array[1].base == 1 && this.array[0].base > Math.log10(Number.MAX_VALUE))
+		) return Infinity * x
+
+		if (this.array.length >= 2 && this.array[1].base == 1) return Math.pow(10, this.array[0].base)
+		return this.array[0].base
+	}
+
 	isNaN() {
 		return isNaN(this.array[0].base)
 	}
 
 	isFinite() {
 		return isFinite(this.array[0].base)
+	}
+
+	isInfinite() {
+		return !isFinite(this.array[0].base)
 	}
 
 	gt<U extends IntoExpantaNum>(o: U) {
@@ -622,9 +672,177 @@ export class ExpantaNum implements IntoExpantaNum {
 	}
 
 	eqTolerance<U extends IntoExpantaNum>(o: U, tol?: number) {
-		const other = o.toExpantaNum().unwrapOrElse(() => new ExpantaNum()), tolerance = tol ? tol : 1e-7
+		const other = o.toExpantaNum().unwrapOrElse(() => new ExpantaNum())
+
 		if (this.isNaN() || other.isNaN() || !this.isFinite() || !other.isFinite() || this.sign == other.sign || Math.abs(this.layer - other.layer) > 1) {
 			return false
 		}
+
+		const tolerance = tol ? tol : 1e-7
+
+		let a, b
+		if (this.layer != other.layer) {
+			let x, y
+			if (this.layer > other.layer) x = this, y = other
+			else x = other, y = this
+			if (!(x.array.length == 2 && x.array[0].operator === 0 && x.array[1].operator == 1 && x.array[1].base == 1)) return false
+			a = x.array[0].base
+			if (y.array[y.array.length - 1].base >= 10) b = Math.log10(y.array[y.array.length - 1].operator + 1)
+			else b = Math.log10(y.array[y.array.length - 1].operator)
+		} else {
+			if (Math.abs(this.array[this.array.length - 1].operator - other.array[other.array.length - 1].operator) > 1) return false
+			for (let i = 1; Math.max(this.array.length, other.array.length) - i >= 0; ++i) {
+				let c = this.array[this.array.length - i].operator
+				const d = other.array[other.array.length - i].operator
+				let x, y, e, f
+
+				if (c != d) {
+					if (c > d) x = this, y = other
+					else x = other, y = this, c = d
+					e = x.array[x.array.length - i].base
+					f = 0
+				} else {
+					x = this
+					y = other
+					e = x.array[x.array.length - i].base
+					f = y.array[y.array.length - i].base
+					if (x.array.length - i == 0) {
+						a = e
+						b = f
+						break
+					}
+				}
+				if (Math.abs(e - f) > 1) return false
+				else if (e != f) {
+					if (!(x.array.length - i < 2 || x.array.length - i == 2 && x.array[0].operator === 0 && x.array[1].operator == 1 && x.array[1].base == 1)) {
+						return false
+					}
+
+					a = x.array[0].operator
+					if (c == 1) b = Math.log10(y.getOperator(0))
+					else if (c == 2 && y.getOperator(0) >= 1e10) b = Math.log10(y.getOperator(1) + 2)
+					else if (y.getOperator(c - 2) >= 10) b = Math.log10(y.getOperator(c - 1) + 1)
+					else b = Math.log10(y.getOperator(c - 1))
+					break
+				}
+			}
+		}
+
+		b = b === undefined ? 0 : b, a = a === undefined ? 0 : a
+		return Math.abs(a - b) <= tolerance * Math.max(Math.abs(a), Math.abs(b))
+	}
+
+	isInteger() {
+		if (this.gt(ExpantaNum.Constants.MAX_SAFE_INTEGER)) return true
+		else Number.isInteger(this.toNumber())
+	}
+
+	floor() {
+		if (this.isInteger()) return this.clone()
+		else return ExpantaNum.fromNumber(Math.floor(this.toNumber()))
+	}
+
+	ceil() {
+		if (this.isInteger()) return this.clone()
+		else return ExpantaNum.fromNumber(Math.ceil(this.toNumber()))
+	}
+
+	round() {
+		if (this.isInteger()) return this.clone()
+		else return ExpantaNum.fromNumber(Math.round(this.toNumber()))
+	}
+
+	min<O extends IntoExpantaNum>(o: O) {
+		const other = o.toExpantaNum().unwrapOrElse(() => new ExpantaNum())
+		return this.lte(other) ? this : other
+	}
+
+	max<O extends IntoExpantaNum>(o: O) {
+		const other = o.toExpantaNum().unwrapOrElse(() => new ExpantaNum())
+		return this.gte(other) ? other : this
+	}
+
+	add<O extends IntoExpantaNum>(o: O) {
+		const other = o.toExpantaNum().unwrapOrElse(() => new ExpantaNum())
+
+		if (this.sign.isNegative()) return this.neg().add(other.neg()).neg()
+		if (other.sign.isNegative()) return this.sub(other.neg())
+
+		if (this.eq(ExpantaNum.Constants.ZERO)) return other
+		if (other.eq(ExpantaNum.Constants.ZERO)) return this
+
+		if (this.isNaN() || other.isNaN() || (this.isInfinite() && other.isInfinite() && this.eq(other.neg()))) return ExpantaNum.Constants.NaN.clone()
+
+		if (this.isInfinite()) return this
+		if (other.isInfinite()) return other
+
+		const p = this.min(other), q = this.max(other)
+		const op0 = q.getOperator(0), op1 = q.getOperator(1)
+
+		let t
+
+		if (q.gt(ExpantaNum.Constants.E_MAX_SAFE_INTEGER) || q.div(p).gt(ExpantaNum.Constants.MAX_SAFE_INTEGER)) {
+			t = q
+		} else if (!op1) {
+			t = ExpantaNum.fromNumber(this.toNumber() + other.toNumber())
+		} else if (op1 == 1) {
+			const a = p.getOperator(1) ? p.getOperator(0) : Math.log10(p.getOperator(0))
+			t = ExpantaNum.fromArray([a + Math.log10(Math.pow(10, op0 - a) + 1), 1])
+		}
+		return t
+	}
+
+	sub<O extends IntoExpantaNum>(o: O) {
+		const other = o.toExpantaNum().unwrapOrElse(() => new ExpantaNum())
+
+		if (this.sign.isNegative()) return this.neg().sub(other.neg()).neg()
+		if (other.sign.isNegative()) return this.add(other.neg())
+
+		if (this.eq(other)) return ExpantaNum.Constants.ZERO.clone()
+		if (other.eq(ExpantaNum.Constants.ZERO)) return this
+		if (this.isNaN() || other.isNaN() || this.isInfinite() && other.isInfinite()) return ExpantaNum.Constants.NaN.clone()
+
+		if (this.isInfinite()) return this
+		if (other.isInfinite()) return other.neg()
+
+		const p = this.min(other), q = this.max(other)
+		const op0 = q.getOperator(0), op1 = q.getOperator(1)
+		const n = other.gt(this)
+
+		let t
+		if (q.gt(ExpantaNum.Constants.E_MAX_SAFE_INTEGER) || q.div(p).gt(ExpantaNum.Constants.MAX_SAFE_INTEGER)) {
+			t = q
+			t = n ? t.neg() : t
+		} else if (!op1) {
+			t = ExpantaNum.fromNumber(this.toNumber() - other.toNumber())
+		} else if (op1 == 1) {
+			const a = p.getOperator(1) ? p.getOperator(0) : Math.log10(p.getOperator(0))
+			t = ExpantaNum.fromArray([a + Math.log10(Math.pow(10, op0 - a) - 1), 1])
+			t = n ? t.neg() : t
+		}
+		return t
+	}
+
+	mul<O extends IntoExpantaNum>(o: O) {
+		const other = o.toExpantaNum().unwrapOrElse(() => new ExpantaNum())
+
+		if (this.sign.valueOf() * other.sign.valueOf() == -1) return this.abs().mul(other.abs()).neg()
+		if (this.sign.isNegative()) return this.abs().mul(other.abs())
+
+		if (
+			this.isNaN() || other.isNaN() || this.eq(ExpantaNum.Constants.ZERO) && other.isInfinite() ||
+			this.isInfinite() && other.abs().eq(ExpantaNum.Constants.ZERO)
+		) return ExpantaNum.Constants.NaN.clone()
+
+		if (other.eq(ExpantaNum.Constants.ZERO)) return ExpantaNum.Constants.ZERO.clone()
+		if (other.eq(ExpantaNum.Constants.ONE)) return this.clone()
+
+		if (this.isInfinite()) return this.clone()
+		if (other.isInfinite()) return other
+
+		if (this.max(other).gt(ExpantaNum.Constants.EE_MAX_SAFE_INTEGER)) return this.max(other)
+		const n = this.toNumber() * other.toNumber()
+		if (n <= MAX_SAFE_INTEGER) return ExpantaNum.fromNumber(n)
+		return ExpantaNum.pow(10, this.log10().add(other.log10()))
 	}
 }
